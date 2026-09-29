@@ -1,10 +1,10 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { Plus, ShieldCheck, ShieldUser, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { DashboardAccount } from "@/lib/supabase";
-import { DataTable, Header, MetricCard } from "./shared";
+import { DataTable, MetricCard, PageHeader } from "./shared";
 
 export function AccountsPage({ session }: { session: Session }) {
   const [accounts, setAccounts] = useState<DashboardAccount[]>([]);
@@ -61,12 +61,13 @@ export function AccountsPage({ session }: { session: Session }) {
 
   return (
     <>
-      <Header title="Accounts" description="Manage back office users and view access roles." />
-      <section className="metric-grid account-metrics">
-        <MetricCard label="Dashboard Accounts" value={accounts.length} />
-        <MetricCard label="Super Admins" value={accounts.filter((item) => item.role === "super_admin").length} />
-        <MetricCard label="View-only Admins" value={accounts.filter((item) => item.role === "admin").length} />
-      </section>
+      <PageHeader title="Accounts" description="Manage back office users and view access roles." />
+      <div className="page-body">
+        <section className="metric-grid account-metrics">
+          <MetricCard label="Dashboard Accounts" value={accounts.length} icon={Users} />
+          <MetricCard label="Super Admins" value={accounts.filter((item) => item.role === "super_admin").length} icon={ShieldCheck} />
+          <MetricCard label="View-only Admins" value={accounts.filter((item) => item.role === "admin").length} icon={ShieldUser} />
+        </section>
       <section className="account-layout">
         <form className="account-form" onSubmit={createAccount}>
           <h2>Create Account</h2>
@@ -113,7 +114,7 @@ export function AccountsPage({ session }: { session: Session }) {
           />
         </div>
       </section>
-    </>
-  );
+    </div>
+  </>
+);
 }
-

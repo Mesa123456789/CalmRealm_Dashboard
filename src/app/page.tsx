@@ -1,6 +1,7 @@
 "use client";
 
 import { Activity, BarChart3, Eye, EyeOff, Lock, LogOut, Shield, Users } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -100,10 +101,9 @@ export default function Home() {
     <div className="dashboard-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">AOT</div>
           <div>
-            <strong>CalmRealm</strong>
-            <span>Backoffice</span>
+            <strong>Calm Realm</strong>
+            <span>Back office</span>
           </div>
         </div>
         <nav className="nav-list">
@@ -189,8 +189,10 @@ function LoginScreen() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <div className="login-logo">AOT</div>
-        <h1>Backoffice Login</h1>
+        <div className="login-logo">
+          <Image src="/LOGO.png" alt="Calm Realm Logo" width={300} height={105} style={{ objectFit: "fill" }} priority />
+        </div>
+        <h1>Back office Login</h1>
         <label>
           Account name or email
           <input value={accountNameOrEmail} onChange={(event) => setAccountNameOrEmail(event.target.value)} required />
