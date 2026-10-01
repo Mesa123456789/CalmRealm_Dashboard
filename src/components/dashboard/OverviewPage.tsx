@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleCheckBig, Clock3, Download, Gauge, LineChart, Star, Trophy, UsersRound } from "lucide-react";
+import { CircleCheckBig, Gauge, UsersRound } from "lucide-react";
 import { useMemo } from "react";
 import type { Participant, SceneData } from "@/lib/supabase";
 import {
@@ -9,20 +9,40 @@ import {
   DonutPanel,
   MetricCard,
   PageHeader,
-  average,
   countBy,
-  downloadCsv,
   formatNumber,
   formatPercent,
+  latestDate,
   matchesParticipant,
   participantName,
   sceneDuration,
-  sceneScore,
-  sceneStars,
   uniqueValues,
   withinDateRange,
   type Filters,
 } from "./shared";
+
+function sceneDetailTimestamp(scene: SceneData) {
+  const timestamp = scene.details?.timestamp;
+  if (typeof timestamp !== "string" || !timestamp.trim()) return null;
+  const time = new Date(timestamp.trim().replace(" ", "T")).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function actPlayDuration(scenes: SceneData[]) {
+  const playDurations = scenes.map(sceneDuration).filter((value): value is number => value !== null && Number.isFinite(value));
+  if (!playDurations.length) return null;
+  return playDurations.reduce((sum, duration) => sum + duration, 0);
+}
+
+function actDurationMap(userScenes: SceneData[]) {
+  const scenesByAct = new Map<string, SceneData[]>();
+  userScenes.forEach((scene) => {
+    const act = scene.act ?? "-";
+    scenesByAct.set(act, [...(scenesByAct.get(act) ?? []), scene]);
+  });
+
+  return new Map(Array.from(scenesByAct, ([act, scenes]) => [act, actPlayDuration(scenes)]));
+}
 
 export function OverviewPage({
   participants,
@@ -38,39 +58,59 @@ export function OverviewPage({
   canExport: boolean;
 }) {
   const availableActs = useMemo(() => uniqueValues(sceneData, (scene) => scene.act), [sceneData]);
-  const filteredParticipants = participants.filter((user) => matchesParticipant(user, filters));
+
+  const completeDataUserIds = useMemo(() => {
+    const set = new Set<number>();
+    if (!availableActs.length) return set;
+    const userActsMap = new Map<number, Set<string>>();
+    sceneData.forEach((scene) => {
+      if (scene.userId !== null && scene.act) {
+        const userActs = userActsMap.get(scene.userId) ?? new Set<string>();
+        userActs.add(scene.act);
+        userActsMap.set(scene.userId, userActs);
+      }
+    });
+    userActsMap.forEach((actsSet, userId) => {
+      if (actsSet.size >= availableActs.length) {
+        set.add(userId);
+      }
+    });
+    return set;
+  }, [sceneData, availableActs]);
+
+  const filteredParticipants = participants.filter((user) => matchesParticipant(user, filters, completeDataUserIds));
   const filteredUserIds = new Set(filteredParticipants.map((user) => user.userId));
   const filteredScenes = sceneData.filter(
     (scene) =>
       scene.userId !== null &&
       filteredUserIds.has(scene.userId) &&
-      (filters.act === "all" || scene.act === filters.act) &&
+      (!filters.act.length || filters.act.includes(String(scene.act ?? ""))) &&
       withinDateRange(scene.createdAt, filters),
   );
-  const completionKeys = new Set(filteredScenes.map((scene) => `${scene.userId}:${scene.act}`));
   const completedUserIds = new Set(filteredScenes.map((scene) => scene.userId));
   const completionRate = filteredParticipants.length ? (completedUserIds.size / filteredParticipants.length) * 100 : 0;
-
-  const scoreValues = filteredScenes.map(sceneScore).filter((value): value is number => value !== null);
-  const durationValues = filteredScenes.map(sceneDuration).filter((value): value is number => value !== null);
-  const starValues = filteredScenes.map(sceneStars).filter((value): value is number => value !== null);
-
-  const averageScore = average(scoreValues);
-  const averageDuration = average(durationValues);
-  const averageStars = average(starValues);
-
-  const minScore = scoreValues.length ? Math.min(...scoreValues) : null;
-  const maxScore = scoreValues.length ? Math.max(...scoreValues) : null;
-
-  const minDuration = durationValues.length ? Math.min(...durationValues) : null;
-  const maxDuration = durationValues.length ? Math.max(...durationValues) : null;
-
-  const minStars = starValues.length ? Math.min(...starValues) : null;
-  const maxStars = starValues.length ? Math.max(...starValues) : null;
 
   const ageData = countBy(filteredParticipants, (user) => user.age);
   const genderData = countBy(filteredParticipants, (user) => user.gender);
   const schoolData = countBy(filteredParticipants, (user) => user.school);
+
+  const summaryRows = filteredParticipants.map((user) => {
+    const userScenes = filteredScenes.filter((scene) => scene.userId === user.userId);
+    const userActs = new Set(userScenes.map((scene) => scene.act).filter(Boolean));
+    const userDurations = Array.from(actDurationMap(userScenes).values()).filter((value): value is number => value !== null);
+    const userTotalDuration = userDurations.length ? userDurations.reduce((sum, d) => sum + d, 0) : null;
+
+    return {
+      User: participantName(user),
+      Age: user.age ?? "",
+      Gender: user.gender ?? "",
+      School: user.school ?? "",
+      "Total ACTs": availableActs.length,
+      "Completion Rate": availableActs.length ? formatPercent((userActs.size / availableActs.length) * 100) : "-",
+      "Play Duration": userTotalDuration === null ? "-" : `${formatNumber(userTotalDuration / 60, 1)} min`,
+      "Latest Complete": latestDate(userScenes.map((scene) => scene.createdAt)),
+    };
+  });
 
   const rows = filteredParticipants.flatMap((user) => {
     const userScenes = filteredScenes
@@ -78,7 +118,7 @@ export function OverviewPage({
       .sort((a, b) => String(a.act ?? "").localeCompare(String(b.act ?? ""), undefined, { numeric: true }));
 
     if (!userScenes.length) {
-      if (filters.act !== "all") return [];
+      if (filters.act.length) return [];
       return [
         {
           User: participantName(user),
@@ -86,39 +126,53 @@ export function OverviewPage({
           Gender: user.gender ?? "",
           School: user.school ?? "",
           ACT: "-",
-          Score: "-",
-          Ranks: "-",
-          "Completion Rate": "0%",
+          "Play Duration": "-",
+          // Score: "-",
+          // Ranks: "-",
+          // "Completion Rate": "0%",
           "Latest Complete": "-",
         },
       ];
     }
 
-    const seen = new Set<string>();
-    const uniqueUserScenes = userScenes.filter((scene) => {
-      const key = `${scene.act}:${scene.createdAt}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    const scenesByAct = new Map<string, SceneData[]>();
+    userScenes.forEach((scene) => {
+      const act = scene.act ?? "-";
+      scenesByAct.set(act, [...(scenesByAct.get(act) ?? []), scene]);
     });
+    const userActDurations = actDurationMap(userScenes);
 
-    return uniqueUserScenes.map((scene) => ({
-      User: participantName(user),
-      Age: user.age ?? "",
-      Gender: user.gender ?? "",
-      School: user.school ?? "",
-      ACT: scene.act ?? "-",
-      Score: sceneScore(scene) ?? "-",
-      Ranks: sceneStars(scene) ?? "-",
-      "Completion Rate": availableActs.length
-        ? formatPercent(
-            (Array.from(completionKeys).filter((key) => key.startsWith(`${user.userId}:`)).length /
-              availableActs.length) *
-              100,
-          )
-        : "-",
-      "Latest Complete": scene.createdAt ? new Date(scene.createdAt).toLocaleString() : "-",
-    }));
+    return Array.from(scenesByAct, ([act, actScenes]) => {
+      const duration = userActDurations.get(act) ?? null;
+      const latestScene = [...actScenes].sort((a, b) => {
+        const timeA = sceneDetailTimestamp(a) ?? (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const timeB = sceneDetailTimestamp(b) ?? (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return timeB - timeA;
+      })[0];
+      return {
+        User: participantName(user),
+        Age: user.age ?? "",
+        Gender: user.gender ?? "",
+        School: user.school ?? "",
+        ACT: act,
+        "Play Duration": duration === null ? "-" : `${formatNumber(duration / 60, 1)} min`,
+        // Score: sceneScore(latestScene) ?? "-",
+        // Ranks: sceneStars(latestScene) ?? "-",
+        // "Completion Rate": availableActs.length
+        //   ? formatPercent(
+        //     (Array.from(completionKeys).filter((key) => key.startsWith(`${user.userId}:`)).length /
+        //       availableActs.length) *
+        //     100,
+        //   )
+        //   : "-",
+        "Latest Complete":
+          sceneDetailTimestamp(latestScene) !== null
+            ? new Date(sceneDetailTimestamp(latestScene) ?? 0).toLocaleString()
+            : latestScene.createdAt
+              ? new Date(latestScene.createdAt).toLocaleString()
+              : "-",
+      };
+    });
   });
 
   return (
@@ -141,79 +195,20 @@ export function OverviewPage({
         <section className="dashboard-layout overview-layout">
           <div className="main-stack">
             <section className="overview-visual-grid">
-              <div className="overview-left-stack">
-                <BarPanel title="Age Distribution" data={ageData} />
-                <BarPanel title="School Distribution" data={schoolData} wide />
-              </div>
-              <div className="overview-right-stack">
-                <DonutPanel title="Gender" data={genderData} icon={UsersRound} />
-                <article className="performance-panel">
-                  <div className="section-title">
-                    <span className="section-icon">
-                      <LineChart size={16} />
-                    </span>
-                    <h2>Performance Snapshot</h2>
-                  </div>
-                  <div className="performance-chips">
-                    <div className="perf-chip perf-score">
-                      <div className="perf-chip-left">
-                        <span className="perf-icon-badge">
-                          <Trophy size={20} />
-                        </span>
-                        <div className="perf-main-info">
-                          <small>Average score</small>
-                          <strong>{formatNumber(averageScore, 1)}</strong>
-                        </div>
-                      </div>
-                      <div className="perf-range-right">
-                        <span>Min: {formatNumber(minScore, 0)}</span>
-                        <span>Max: {formatNumber(maxScore, 0)}</span>
-                      </div>
-                    </div>
-                    <div className="perf-chip perf-time">
-                      <div className="perf-chip-left">
-                        <span className="perf-icon-badge">
-                          <Clock3 size={20} />
-                        </span>
-                        <div className="perf-main-info">
-                          <small>Avg play time</small>
-                          <strong>
-                            {averageDuration === null ? "-" : `${formatNumber(averageDuration / 60, 1)} min`}
-                          </strong>
-                        </div>
-                      </div>
-                      <div className="perf-range-right">
-                        <span>Min: {minDuration === null ? "-" : `${formatNumber(minDuration / 60, 1)}m`}</span>
-                        <span>Max: {maxDuration === null ? "-" : `${formatNumber(maxDuration / 60, 1)}m`}</span>
-                      </div>
-                    </div>
-                    <div className="perf-chip perf-rank">
-                      <div className="perf-chip-left">
-                        <span className="perf-icon-badge">
-                          <Star size={20} fill="currentColor" />
-                        </span>
-                        <div className="perf-main-info">
-                          <small>Avg rank</small>
-                          <strong>{formatNumber(averageStars, 1)}</strong>
-                        </div>
-                      </div>
-                      <div className="perf-range-right">
-                        <span>Min: {formatNumber(minStars, 0)}</span>
-                        <span>Max: {formatNumber(maxStars, 0)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </article>
-              </div>
+              <BarPanel title="Age Distribution" data={ageData} vertical />
+              <DonutPanel title="Gender" data={genderData} icon={UsersRound} />
+              <BarPanel title="School Distribution" data={schoolData} vertical wide />
             </section>
             <div className="table-heading">
-              <h2>Participant Progress</h2>
-              <button className="secondary-button" disabled={!canExport || !rows.length} onClick={() => downloadCsv("overview.csv", rows)}>
-                <Download size={16} /> Export CSV
-              </button>
+              <h2>Participant Progress Summary</h2>
             </div>
             {!canExport ? <p className="hint">Admin role can view data only. Export is available for super admin.</p> : null}
-            <DataTable rows={rows} />
+            <DataTable rows={summaryRows} exportFilename="participant-progress-summary.csv" canExport={canExport} />
+            <div className="table-heading">
+              <h2>Participant Progress</h2>
+            </div>
+            {!canExport ? <p className="hint">Admin role can view data only. Export is available for super admin.</p> : null}
+            <DataTable rows={rows} exportFilename="overview.csv" canExport={canExport} />
           </div>
         </section>
       </div>

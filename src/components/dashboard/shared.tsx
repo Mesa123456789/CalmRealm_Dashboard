@@ -1,25 +1,27 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, Clock3, Database, Funnel, HeartPulse, RotateCcw, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, Clock3, Database, Download, Funnel, HeartPulse, RotateCcw, Search, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Participant, SceneData, WatchLog } from "@/lib/supabase";
 export type Filters = {
   from: string;
   to: string;
-  gender: string;
-  age: string;
-  school: string;
-  act: string;
+  gender: string[];
+  age: string[];
+  school: string[];
+  act: string[];
+  dataStatus: string;
 };
 
 export const emptyFilters: Filters = {
   from: "",
   to: "",
-  gender: "all",
-  age: "all",
-  school: "all",
-  act: "all",
+  gender: [],
+  age: [],
+  school: [],
+  act: [],
+  dataStatus: "all",
 };
 
 function csvEscape(value: unknown) {
@@ -34,7 +36,7 @@ export function downloadCsv(filename: string, rows: Record<string, unknown>[]) {
     headers.map(csvEscape).join(","),
     ...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(",")),
   ].join("\n");
-  const blob = new Blob([body], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob(["\uFEFF", body], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -60,11 +62,16 @@ export function withinDateRange(dateValue: string | null | undefined, filters: F
   return true;
 }
 
-export function matchesParticipant(user: Participant | undefined, filters: Filters) {
+export function matchesParticipant(
+  user: Participant | undefined,
+  filters: Filters,
+  completedUserIds?: Set<number>,
+) {
   if (!user) return false;
-  if (filters.gender !== "all" && user.gender !== filters.gender) return false;
-  if (filters.age !== "all" && String(user.age ?? "") !== filters.age) return false;
-  if (filters.school !== "all" && user.school !== filters.school) return false;
+  if (filters.gender.length && !filters.gender.includes(String(user.gender ?? ""))) return false;
+  if (filters.age.length && !filters.age.includes(String(user.age ?? ""))) return false;
+  if (filters.school.length && !filters.school.includes(String(user.school ?? ""))) return false;
+  if (filters.dataStatus === "complete" && completedUserIds && !completedUserIds.has(user.userId)) return false;
   return true;
 }
 
@@ -86,6 +93,58 @@ export function countBy<T>(items: T[], getValue: (item: T) => unknown) {
   });
   return Array.from(counts, ([label, value]) => ({ label, value })).sort((a, b) =>
     a.label.localeCompare(b.label, undefined, { numeric: true }),
+  );
+}
+
+function toggleFilterValue(values: string[], value: string) {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function filterSummary(values: string[], placeholder = "All") {
+  if (!values.length) return placeholder;
+  if (values.length <= 2) return values.join(", ");
+  return `${values.length} selected`;
+}
+
+function MultiCheckboxFilter({
+  label,
+  values,
+  options,
+  onChange,
+}: {
+  label: string;
+  values: string[];
+  options: (string | number)[];
+  onChange: (values: string[]) => void;
+}) {
+  return (
+    <div className="multi-filter">
+      <span className="multi-filter-label">{label}</span>
+      <details className="multi-filter-details">
+        <summary>
+          <strong>{filterSummary(values)}</strong>
+        </summary>
+        <div className="multi-filter-menu">
+          <label className="multi-filter-option">
+            <input type="checkbox" checked={!values.length} onChange={() => onChange([])} />
+            <span>All</span>
+          </label>
+          {options.map((option) => {
+            const value = String(option);
+            return (
+              <label className="multi-filter-option" key={value}>
+                <input
+                  type="checkbox"
+                  checked={values.includes(value)}
+                  onChange={() => onChange(toggleFilterValue(values, value))}
+                />
+                <span>{value}</span>
+              </label>
+            );
+          })}
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -120,7 +179,7 @@ export function sceneStars(scene: SceneData) {
 }
 
 export function sceneDuration(scene: SceneData) {
-  return asNumber(scene.details?.timePlayed);
+  return asNumber(scene.details?.playDuration) ?? asNumber(scene.details?.timePlayed);
 }
 
 export function sceneResult(scene: SceneData) {
@@ -171,51 +230,18 @@ export function FilterPanel({
           Date to
           <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
         </label>
+        <MultiCheckboxFilter label="Gender" values={filters.gender} options={genders} onChange={(gender) => setFilters({ ...filters, gender })} />
+        <MultiCheckboxFilter label="Age" values={filters.age} options={ages} onChange={(age) => setFilters({ ...filters, age })} />
+        <MultiCheckboxFilter label="School" values={filters.school} options={schools} onChange={(school) => setFilters({ ...filters, school })} />
         <label>
-          Gender
-          <select value={filters.gender} onChange={(event) => setFilters({ ...filters, gender: event.target.value })}>
-            <option value="all">All</option>
-            {genders.map((gender) => (
-              <option key={gender} value={gender}>
-                {gender}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Age
-          <select value={filters.age} onChange={(event) => setFilters({ ...filters, age: event.target.value })}>
-            <option value="all">All</option>
-            {ages.map((age) => (
-              <option key={age} value={age}>
-                {age}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          School
-          <select value={filters.school} onChange={(event) => setFilters({ ...filters, school: event.target.value })}>
-            <option value="all">All</option>
-            {schools.map((school) => (
-              <option key={school} value={school}>
-                {school}
-              </option>
-            ))}
+          Data Status
+          <select value={filters.dataStatus} onChange={(event) => setFilters({ ...filters, dataStatus: event.target.value })}>
+            <option value="all">All Users (ทุกคน)</option>
+            <option value="complete">Complete Data Only (เฉพาะคนที่มี Data ครบ)</option>
           </select>
         </label>
         {showAct ? (
-          <label>
-            ACT
-            <select value={filters.act} onChange={(event) => setFilters({ ...filters, act: event.target.value })}>
-              <option value="all">All</option>
-              {acts.map((act) => (
-                <option key={act} value={act}>
-                  {act}
-                </option>
-              ))}
-            </select>
-          </label>
+          <MultiCheckboxFilter label="ACT" values={filters.act} options={acts} onChange={(act) => setFilters({ ...filters, act })} />
         ) : null}
       </div>
       <button className="text-button" onClick={() => setFilters(emptyFilters)}>
@@ -249,12 +275,13 @@ export function PageHeader({
 
   const hasActiveFilters = Boolean(
     filters &&
-      (filters.from !== "" ||
-        filters.to !== "" ||
-        filters.gender !== "all" ||
-        filters.age !== "all" ||
-        filters.school !== "all" ||
-        (showAct && filters.act !== "all")),
+    (filters.from !== "" ||
+      filters.to !== "" ||
+      filters.gender.length > 0 ||
+      filters.age.length > 0 ||
+      filters.school.length > 0 ||
+      filters.dataStatus !== "all" ||
+      (showAct && filters.act.length > 0)),
   );
 
   return (
@@ -290,65 +317,23 @@ export function PageHeader({
               onChange={(event) => setFilters({ ...filters, to: event.target.value })}
             />
           </div>
+          <MultiCheckboxFilter label="Gender" values={filters.gender} options={genders} onChange={(gender) => setFilters({ ...filters, gender })} />
+          <MultiCheckboxFilter label="Age" values={filters.age} options={ages} onChange={(age) => setFilters({ ...filters, age })} />
+          <MultiCheckboxFilter label="School" values={filters.school} options={schools} onChange={(school) => setFilters({ ...filters, school })} />
           <div className="header-filter-item">
-            <label>Gender</label>
+            <label>Data Status</label>
             <select
-              value={filters.gender}
-              onChange={(event) => setFilters({ ...filters, gender: event.target.value })}
+              value={filters.dataStatus}
+              onChange={(event) => setFilters({ ...filters, dataStatus: event.target.value })}
             >
-              <option value="all">All</option>
-              {genders.map((gender) => (
-                <option key={gender} value={gender}>
-                  {gender}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="header-filter-item">
-            <label>Age</label>
-            <select
-              value={filters.age}
-              onChange={(event) => setFilters({ ...filters, age: event.target.value })}
-            >
-              <option value="all">All</option>
-              {ages.map((age) => (
-                <option key={age} value={age}>
-                  {age}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="header-filter-item">
-            <label>School</label>
-            <select
-              value={filters.school}
-              onChange={(event) => setFilters({ ...filters, school: event.target.value })}
-            >
-              <option value="all">All</option>
-              {schools.map((school) => (
-                <option key={school} value={school}>
-                  {school}
-                </option>
-              ))}
+              <option value="all">All Users</option>
+              <option value="complete">Complete Data Only</option>
             </select>
           </div>
           {showAct && acts ? (
-            <div className="header-filter-item">
-              <label>ACT</label>
-              <select
-                value={filters.act}
-                onChange={(event) => setFilters({ ...filters, act: event.target.value })}
-              >
-                <option value="all">All</option>
-                {acts.map((act) => (
-                  <option key={act} value={act}>
-                    {act}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <MultiCheckboxFilter label="ACT" values={filters.act} options={acts} onChange={(act) => setFilters({ ...filters, act })} />
           ) : null}
-          {setFilters ? (
+          {/* {setFilters ? (
             <button
               className="header-filter-reset"
               onClick={() => setFilters(emptyFilters)}
@@ -357,7 +342,7 @@ export function PageHeader({
               <RotateCcw size={13} />
               Reset
             </button>
-          ) : null}
+          ) : null} */}
         </div>
       ) : null}
     </header>
@@ -461,10 +446,20 @@ export function SensorCard({ title, values }: { title: string; values: number[] 
   );
 }
 
-export function BarPanel({ title, data, wide }: { title: string; data: { label: string; value: number }[]; wide?: boolean }) {
+export function BarPanel({
+  title,
+  data,
+  wide,
+  vertical,
+}: {
+  title: string;
+  data: { label: string; value: number }[];
+  wide?: boolean;
+  vertical?: boolean;
+}) {
   const max = Math.max(1, ...data.map((item) => item.value));
   return (
-    <article className={`chart-panel ${wide ? "wide" : ""}`}>
+    <article className={`chart-panel ${wide ? "wide" : ""} ${vertical ? "vertical" : ""}`}>
       <h3>{title}</h3>
       <div className="bar-chart-scroll">
         <div className="bar-chart">
@@ -473,7 +468,7 @@ export function BarPanel({ title, data, wide }: { title: string; data: { label: 
               <div className="bar-item" key={item.label}>
                 <span>{item.label}</span>
                 <div>
-                  <i style={{ width: `${(item.value / max) * 100}%` }} />
+                  <i style={vertical ? { height: `${(item.value / max) * 100}%` } : { width: `${(item.value / max) * 100}%` }} />
                 </div>
                 <b>{item.value}</b>
               </div>
@@ -547,7 +542,15 @@ export function DonutPanel({
   );
 }
 
-export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
+export function DataTable({
+  rows,
+  exportFilename,
+  canExport,
+}: {
+  rows: Record<string, unknown>[];
+  exportFilename?: string;
+  canExport?: boolean;
+}) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
@@ -597,10 +600,31 @@ export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
 
   return (
     <section className="table-card">
-      <div className="table-tools">
-        <Search size={16} />
-        <input placeholder="Search..." value={query} onChange={(event) => setQuery(event.target.value)} />
-        <span>{visibleRows.length} rows</span>
+      <div className="table-action-row">
+        <div className="table-tools">
+          <Search size={16} />
+          <input placeholder="Search..." value={query} onChange={(event) => setQuery(event.target.value)} />
+          <button
+            className="search-clear-button"
+            disabled={!query}
+            onClick={() => setQuery("")}
+            title="Clear search"
+            type="button"
+          >
+            <X size={14} />
+          </button>
+          <span>{visibleRows.length} rows</span>
+        </div>
+        {exportFilename ? (
+          <button
+            className="secondary-button"
+            disabled={!canExport || !visibleRows.length}
+            onClick={() => downloadCsv(exportFilename, visibleRows)}
+            type="button"
+          >
+            <Download size={16} /> Export CSV
+          </button>
+        ) : null}
       </div>
       <div className="table-scroll">
         <table>
